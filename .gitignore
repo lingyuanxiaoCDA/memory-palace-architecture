@@ -1,0 +1,44 @@
+# ============================================================
+# 记忆数据（隐私，绝不上传）
+# ============================================================
+*.db
+*.sqlite3
+*.sqlite
+chroma.sqlite3*
+agent_memory.db*
+
+# 个人记忆内容
+diary.md
+MEMORY.md
+lessons.md
+current_task.json
+goals.json
+alive_state.json
+reply.md
+remark.md
+inbox.md
+experience/
+sessions/
+notes/
+*.part
+*.bak_*
+
+# 日志与临时
+_tmp/
+*.log
+*.log.jsonl
+__pycache__/
+*.pyc
+
+# 脱敏过程的备份
+*.orig
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地覆盖配置（含你的路径/密钥）
+config.local.py
+.env
+.env.*
