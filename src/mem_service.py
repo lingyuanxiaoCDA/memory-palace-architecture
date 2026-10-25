@@ -196,6 +196,46 @@ class Handler(BaseHTTPRequestHandler):
             r = do_recall(need, lim)
             r["ms_total"] = round((time.time() - t0) * 1000, 1)
             self._send(200, r)
+        elif self.path.startswith("/forget"):
+            # Cognee 四动词对齐：forget = 标记失效（不删数据，用户定调不修剪）
+            try:
+                import validity
+                eid = str(body.get("id") or "")
+                e = validity.invalidate(eid, superseded_by=str(body.get("superseded_by") or ""),
+                                        reason=str(body.get("reason") or ""))
+                self._send(200, {"ok": bool(e), "entry": e})
+            except Exception as e:
+                self._send(500, {"error": str(e)[:120]})
+        elif self.path.startswith("/remember"):
+            # Cognee 四动词对齐：remember = mine 入库（别名）
+            only = body.get("only")
+            def _run2():
+                try:
+                    import auto_mine
+                    for name, path in auto_mine.TARGETS:
+                        if only and name != only:
+                            continue
+                        auto_mine.mine(name, path)
+                except Exception as e:
+                    log(f"remember 异常: {e}")
+            threading.Thread(target=_run2, daemon=True).start()
+            self._send(200, {"started": True, "verb": "remember", "only": only})
+        elif self.path.startswith("/improve"):
+            # Cognee 四动词对齐：improve = 节点提取 + 路由训练
+            def _run3():
+                try:
+                    import train_router
+                    r = train_router.train()
+                    log(f"improve 训练: ok={r.get('ok')} 样本={r.get('n_total')}")
+                    try:
+                        import node_extractor
+                        node_extractor.extract_all()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    log(f"improve 异常: {e}")
+            threading.Thread(target=_run3, daemon=True).start()
+            self._send(200, {"started": True, "verb": "improve"})
         elif self.path.startswith("/mine"):
             only = body.get("only")
             def _run():

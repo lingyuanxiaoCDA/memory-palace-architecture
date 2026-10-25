@@ -216,6 +216,13 @@ def route_and_search(need, limit=5, log=True):
             "[%s] %s" % (r["wing"] or "?", r["text"][:400]) for r in results[:3])
     else:
         out["answer"] = "（未找到相关记忆，可换关键词或确认是否已 mine）"
+    # ③ 时效检查（Graphiti 思想）：结果命中失效结论 → 附警告（防陈旧记忆误导）
+    try:
+        import validity
+        out["staleness_warnings"] = validity.check(need + " " + str(out.get("answer", ""))[:3000])
+    except Exception:
+        out["staleness_warnings"] = []
+
     if log:
         _log({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "need": need,
               "wings": wings, "used": used_wing, "hit": hit, "n": len(results),
