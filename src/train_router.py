@@ -119,6 +119,57 @@ def build_dataset():
     return needs, wings, weights
 
 
+SETFIT_DIR = os.path.join(LOG_DIR, "router_setfit")
+SETFIT_BASE = os.environ.get("MP_SETFIT_BASE", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+
+
+def train_setfit(needs, wings):
+    """训练 SetFit（少样本语义分类：8 条/类即达 RoBERTa 3k 效果）
+    模型存到 SETFIT_DIR；与 TF-IDF 模型并存，由 recall_router 融合裁决"""
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")   # 国内直连快 33 倍
+    from setfit import SetFitModel, SetFitTrainer
+    from datasets import Dataset
+    labels = sorted(set(wings))
+    model = SetFitModel.from_pretrained(SETFIT_BASE, labels=labels)
+    ds = Dataset.from_dict({"text": list(needs), "label": list(wings)})
+    trainer = SetFitTrainer(
+        model=model, train_dataset=ds,
+        metric="accuracy",
+        batch_size=16,
+        num_iterations=20,
+        num_epochs=1,
+        column_mapping={"text": "text", "label": "label"},
+    )
+    trainer.train()
+    os.makedirs(SETFIT_DIR, exist_ok=True)
+    model.save_pretrained(SETFIT_DIR)
+    return {"labels": labels, "n": len(needs), "path": SETFIT_DIR}
+
+
+def predict_setfit(need):
+    """SetFit 预测（带缓存）；返回 {wing, conf, margin} 或 None"""
+    global _SF_CACHE
+    if not os.path.isdir(SETFIT_DIR):
+        return None
+    try:
+        if _SF_CACHE.get("m") is None:
+            from setfit import SetFitModel
+            _SF_CACHE["m"] = SetFitModel.from_pretrained(SETFIT_DIR)
+            _SF_CACHE["labels"] = list(_SF_CACHE["m"].labels or [])
+        m = _SF_CACHE["m"]
+        proba = m.predict_proba([str(need)])[0]
+        order = sorted(zip(_SF_CACHE["labels"], (float(x) for x in proba)), key=lambda x: -x[1])
+        t1, p1 = order[0]
+        t2, p2 = order[1] if len(order) > 1 else ("", 0.0)
+        MIN_ABS = float(os.environ.get("MP_SETFIT_MIN_CONF", "0.30"))
+        MIN_MARGIN = float(os.environ.get("MP_SETFIT_MIN_MARGIN", "0.10"))
+        if p1 < MIN_ABS or (p1 - p2) < MIN_MARGIN:
+            return None
+        return {"wing": t1, "conf": round(p1, 3), "margin": round(p1 - p2, 3)}
+    except Exception:
+        return None
+
+
 def train(eval_mode=False):
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.linear_model import LogisticRegression
@@ -160,12 +211,20 @@ def train(eval_mode=False):
         except Exception as e:
             rep["cv_error"] = str(e)[:80]
 
+    # SetFit 并行训练（失败不影响 TF-IDF 产出）
+    try:
+        sf = train_setfit(needs, wings)
+        rep["setfit"] = sf
+    except Exception as e:
+        rep["setfit_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+
     with open(REPORT, "w", encoding="utf-8") as f:
         json.dump(rep, f, ensure_ascii=False, indent=2)
     return rep
 
 
 _PRED_CACHE = {"m": None, "mtimes": (0, 0)}
+_SF_CACHE = {"m": None, "labels": []}
 
 
 def _load_model_cached():

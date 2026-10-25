@@ -28,7 +28,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 try:
     from config import (LOG_DIR, CHROMA_DB, SQLITE_DB, AUTONOMY, ROOT,
                         WING_KEYWORDS, MEMPALACE_CLI)
-except Exception:                                   # 未装 config 时用默认值
+except Exception:
     LOG_DIR = os.path.join(os.path.expanduser("~"), ".memory-palace", "tmp")
     CHROMA_DB = os.path.join(os.path.expanduser("~"), ".memory-palace", "palace", "chroma.sqlite3")
     SQLITE_DB = os.path.join(os.path.expanduser("~"), ".memory-palace", "agent_memory.db")
@@ -224,6 +224,17 @@ def main():
         print(json.dumps(r, ensure_ascii=False, indent=2)[:800])
         return
     threading.Thread(target=mine_loop, daemon=True).start()
+
+    def _warm():
+        """预热 SetFit 模型（首次加载 9.5s，放后台不阻塞服务）"""
+        time.sleep(5)
+        try:
+            import train_router
+            train_router.predict_setfit('预热')   # 触发模型加载进缓存
+            log('SetFit 模型已预热（缓存就绪）')
+        except Exception as e:
+            log(f'SetFit 预热失败（将自动回落 TF-IDF）: {str(e)[:80]}')
+    threading.Thread(target=_warm, daemon=True).start()
     threading.Thread(target=training_loop, daemon=True).start()   # 连带训练
     srv = HTTPServer(("127.0.0.1", PORT), Handler)
     log(f"监听 127.0.0.1:{PORT}")

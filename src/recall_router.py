@@ -23,7 +23,7 @@ import os, re, json, time, sqlite3
 try:
     from config import (LOG_DIR, CHROMA_DB, SQLITE_DB, AUTONOMY, ROOT,
                         WING_KEYWORDS, MEMPALACE_CLI)
-except Exception:                                   # 未装 config 时用默认值
+except Exception:
     LOG_DIR = os.path.join(os.path.expanduser("~"), ".memory-palace", "tmp")
     CHROMA_DB = os.path.join(os.path.expanduser("~"), ".memory-palace", "palace", "chroma.sqlite3")
     SQLITE_DB = os.path.join(os.path.expanduser("~"), ".memory-palace", "agent_memory.db")
@@ -92,18 +92,29 @@ TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{1,}|[一-鿿]{2,}")
 
 
 def _terms(need, top=8):
-    """分词：英文词 + 中文 2-6 字串，去停用词"""
+    """分词：jieba（中文语义分词）优先，regex 兜底；去停用词"""
     seen = []
-    for m in TERM_RE.finditer(need or ""):
-        w = m.group(0)
-        if w.lower() in STOP:
-            continue
-        if len(w) < 3 and not re.match(r"[一-鿿]", w):
-            continue
-            continue
-        if w not in seen:
-            seen.append(w)
+    try:
+        import jieba
+        for w in jieba.lcut(str(need or "")):
+            w = w.strip()
+            if not w or w.lower() in STOP or len(w) < 2:
+                continue
+            if w not in seen:
+                seen.append(w)
+    except Exception:
+        pass
+    if not seen:                       # jieba 失败 → regex 兜底
+        for mm in TERM_RE.finditer(need or ""):
+            w = mm.group(0)
+            if w.lower() in STOP:
+                continue
+            if len(w) < 3 and not re.match(r"[一-鿿]", w):
+                continue
+            if w not in seen:
+                seen.append(w)
     return seen[:top]
+
 
 
 def _search_db(kw, wing=None, limit=5, use_bm25=True):
@@ -151,17 +162,28 @@ def route_and_search(need, limit=5, log=True):
     模型（train_router 连带训练产出）不确定时自动回落规则路由 —— 这就是"混合裁决"。
     """
     t0 = time.time()
-    # ① 模型优先（连带训练的 sklearn 路由器）
+    # ① SetFit 优先（语义级，实测 9/10；少样本 8 条/类即用）
     pred = None
     try:
         import train_router
-        pred = train_router.predict(need)
+        pred = train_router.predict_setfit(need)
+        if pred:
+            pred["model"] = "setfit"
     except Exception:
         pred = None
+    # ② TF-IDF 次之（词级，快；SetFit 没加载/不确定时顶上）
+    if pred is None:
+        try:
+            import train_router
+            pred = train_router.predict(need)
+            if pred:
+                pred["model"] = "tfidf"
+        except Exception:
+            pred = None
     if pred:
         wings = [pred["wing"]]
         ranked = [(pred["wing"], pred.get("conf", 0))]
-        source = "model"
+        source = pred.get("model", "model")
     else:
         wings, ranked = route(need)
         source = "rule"
